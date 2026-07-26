@@ -62,7 +62,7 @@ streamlit run app.py
 *(Ứng dụng sẽ tự động mở trên trình duyệt tại địa chỉ `http://localhost:8501`)*
 
 ## 💡 Lưu ý về LLM
-**Khuyến nghị:** Do yêu cầu cấu hình phần cứng tương đối cao, nhóm phát triển khuyến nghị bạn nên chạy mã nguồn này trên nền tảng **Kaggle** và bật bộ tăng tốc **GPU T4** để đạt tốc độ nhúng (embedding) và sinh văn bản (text-generation) mượt mà nhất đúng như tiêu chí đánh giá.
+**Khuyến nghị:** Do yêu cầu cấu hình phần cứng tương đối cao, nhóm phát triển khuyến nghị bạn nên chạy mã nguồn này trên nền tảng **Kaggle** và bật bộ tăng tốc **GPU T4** để đạt tốc độ nhúng (embedding) và sinh văn bản (text-generation).
 
 ---
 
