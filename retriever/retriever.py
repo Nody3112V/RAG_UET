@@ -105,27 +105,3 @@ class HybridRetriever:
             return []
             
         return sorted_results[:top_k]
-
-# --- Chạy thử nghiệm module ---
-if __name__ == "__main__":
-    # Đảm bảo trỏ đúng thư mục vector_db bạn đã tạo ở bước Ingestion
-    vector_db_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "vector_db")
-    
-    try:
-        retriever = HybridRetriever(vector_db_dir)
-        
-        # Thử nghiệm với một câu hỏi
-        cau_hoi = "Học kỳ phụ có bao nhiêu tuần học?"
-        print(f"\nCâu hỏi: {cau_hoi}")
-        
-        ket_qua = retriever.hybrid_search(cau_hoi, top_k=3)
-        
-        for i, kq in enumerate(ket_qua, 1):
-            print(f"\n--- Top {i} (Điểm RRF: {kq['rrf_score']:.4f}) ---")
-            chuong_info = kq['chunk'].get('chuong', '')
-            chuong_str = f" | {chuong_info}" if chuong_info else ""
-            print(f"Nguồn: {kq['chunk']['source']}{chuong_str} | Article: {kq['chunk']['article_id']}")
-            print(f"Nội dung trích xuất: {kq['chunk']['text'][:200]}...")
-            
-    except Exception as e:
-        print(f"Có lỗi xảy ra, hãy kiểm tra lại đường dẫn database: {e}")

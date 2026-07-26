@@ -65,4 +65,4 @@ streamlit run app.py
 **Khuyến nghị:** Do yêu cầu cấu hình phần cứng tương đối cao, nhóm phát triển khuyến nghị bạn nên chạy mã nguồn này trên nền tảng **Kaggle** và bật bộ tăng tốc **GPU T4** để đạt tốc độ nhúng (embedding) và sinh văn bản (text-generation) mượt mà nhất đúng như tiêu chí đánh giá.
 
 ---
-© 2026 UET AI Research. All rights reserved.
+

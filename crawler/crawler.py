@@ -27,6 +27,7 @@ if not os.path.exists(LUU_TAM):
 URL = "https://handbook.uet.vnu.edu.vn/"
 MIEN = "handbook.uet.vnu.edu.vn"
 
+# Tạo một session requests với retry để xử lý các lỗi tạm thời khi tải trang web hoặc file
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -54,7 +55,6 @@ def chuyen_pdf_scan_sang_van_ban(duong_dan_file):
 
         # Duyệt qua từng hình ảnh
         for stt, image in enumerate(images):
-            # Sử dụng pytesseract để trích xuất văn bản từ hình ảnh
             text = pytesseract.image_to_string(image, lang='vie')  # sử dụng ngôn ngữ tiếng Việt
             if text:
                 text_ocr += text + "\n"
@@ -65,14 +65,16 @@ def chuyen_pdf_scan_sang_van_ban(duong_dan_file):
         print(f"Lỗi khi chuyển PDF scan sang hình ảnh: {e}")
         return None
 
+# Kiểm tra xem văn bản có phải là rác hay không, dựa trên tỷ lệ ký tự chữ và số trên tổng chiều dài văn bản
 def is_garbage_text(text):
     if not text.strip(): return True
     # Tính tỷ lệ ký tự chữ và số trên tổng chiều dài
     alphanumeric_count = sum(c.isalnum() for c in text)
     if len(text) > 0 and (alphanumeric_count / len(text)) < 0.4:
-        return True # Dưới 40% là chữ/số thì coi là rác
+        return True # Dưới 40% là chữ hoặc số thì coi là rác
     return False
 
+# Tiền xử lý ảnh để tăng độ chính xác của OCR, bao gồm chuyển sang grayscale và áp dụng adaptive thresholding
 def tien_xu_ly_anh(image):
     try:
         img = np.array(image.convert("L"))  # grayscale
@@ -82,6 +84,7 @@ def tien_xu_ly_anh(image):
         print(f"Lỗi tiền xử lý ảnh: {e}")
         return image
 
+# Thay thế các ký tự đặc biệt, khoảng trắng thừa và dòng trống thừa trong văn bản
 def lam_sach_van_ban(text):
     text = text.replace('\f', '\n')
     text = re.sub(r'\n{3,}', '\n\n', text)          # gộp nhiều dòng trống
@@ -169,7 +172,7 @@ def truy_xuat_van_ban_tu_file_url(file_url):
                                 text_trich_xuat += md_tables
                         elif stt < len(images):
                             # Nếu trang không có chữ hoặc là rác -> OCR 
-                            print(f"Trang {stt+1} của file {ten_file} không có chữ hoặc là rác, chạy OCR")
+                            print(f"Trang {stt+1} của file {ten_file} không có chữ hoặc là rác -> chạy OCR")
                             img_processed = tien_xu_ly_anh(images[stt])
                             text_ocr = pytesseract.image_to_string(img_processed, lang='vie', config='--oem 1 --psm 6') 
                             text_trich_xuat += text_ocr + "\n"

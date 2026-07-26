@@ -28,17 +28,22 @@ def loai_bo_muc_luc(noi_dung):
         return noi_dung[:match_muc_luc.start()] + noi_dung[vi_tri_bat_dau:]
     return noi_dung  # không tìm thấy nội dung thật -> giữ nguyên, an toàn hơn là xóa nhầm
 
+# chia nhỏ văn bản thành các đoạn nhỏ
 def chia_nho_van_ban(text, chunk_size=800, chunk_overlap=100):
+
+    # Định nghĩa các ký tự phân tách để chia nhỏ văn bản
     separators = ['\n\n', '\n', '. ', ', ', ' ']
-    
-    def _split(text, separators):
+
+    # Đệ quy để chia nhỏ văn bản dựa trên các ký tự phân tách
+    def split(text, separators):
         if not text:
             return []
-        
+
         if len(text) <= chunk_size:
             return [text]
             
         separator = separators[-1]
+        # Tìm ký tự phân tách đầu tiên xuất hiện trong văn bản
         for sep in separators:
             if sep == "":
                 separator = sep
@@ -49,28 +54,31 @@ def chia_nho_van_ban(text, chunk_size=800, chunk_overlap=100):
                 
         if separator != "":
             splits = text.split(separator)
-            # Re-attach separator to avoid losing characters
             splits = [s + separator for s in splits[:-1]] + [splits[-1]]
         else:
             splits = list(text)
-            
+
+        # Lọc các đoạn nhỏ để đảm bảo chúng không vượt quá chunk_size, nếu vượt quá thì tiếp tục chia nhỏ
         good_splits = []
         for s in splits:
             if len(s) > chunk_size and len(separators) > 1:
                 next_separators = separators[1:] if separator in separators else separators
-                good_splits.extend(_split(s, next_separators))
+                good_splits.extend(split(s, next_separators))
             else:
                 good_splits.append(s)
         return good_splits
 
-    splits = _split(text, separators)
+    # Bắt đầu chia nhỏ văn bản
+    splits = split(text, separators)
     
-    chunks = []
-    current_chunk = []
-    current_length = 0
-    
+    chunks = [] # danh sách các chunk cuối cùng
+    current_chunk = [] # danh sách các đoạn hiện tại đang được ghép lại
+    current_length = 0 # độ dài hiện tại của chunk đang được ghép
+
+    # Duyệt qua các đoạn nhỏ và ghép chúng lại thành các chunk có độ dài tối đa là chunk_size, với phần overlap là chunk_overlap
     for s in splits:
         if current_length + len(s) > chunk_size and current_length > 0:
+            # Nếu độ dài hiện tại vượt quá chunk_size, lưu chunk hiện tại và tạo phần overlap
             chunks.append("".join(current_chunk).strip())
             
             # Tạo phần overlap
@@ -87,24 +95,36 @@ def chia_nho_van_ban(text, chunk_size=800, chunk_overlap=100):
             
         current_chunk.append(s)
         current_length += len(s)
-        
+
+    # Nếu còn đoạn hiện tại chưa được lưu, lưu nó vào danh sách chunks    
     if current_chunk:
         chunks.append("".join(current_chunk).strip())
         
     return [c for c in chunks if c]
 
+# Hàm tách văn bản theo chương
 def phan_tach_theo_chuong(noi_dung):
+
+    # Mẫu regex để tìm các tiêu đề chương trong văn bản
     pattern_chuong = r"(?:\n|^)(Ch[uư][ơo]ng\s+[IVXLC\d]+[\.\s:]*[^\n]*)"
+
+    # chia nhỏ văn bản dựa trên mẫu regex, giữ lại tiêu đề chương và nội dung của chương
     parts = re.split(pattern_chuong, noi_dung)
+
     if len(parts) == 1:
         return [("", noi_dung)]  # không có Chương -> coi cả văn bản là 1 khối
+
+    # Lưu phần nội dung trước chương đầu tiên
     ket_qua = [("", parts[0])] if parts[0].strip() else []
+
+    # Duyệt qua các phần còn lại, mỗi chương sẽ có tiêu đề và nội dung chương
     for i in range(1, len(parts), 2):
         tieu_de_chuong = parts[i].strip()
         noi_dung_chuong = parts[i+1] if i+1 < len(parts) else ""
         ket_qua.append((tieu_de_chuong, noi_dung_chuong))
     return ket_qua
 
+# Ham tách văn bản theo điều
 def phan_tach_theo_dieu(noi_dung, ten_tai_lieu, url_nguon, chuong=""):
 
     # chứa các doạn văn bản được tách ra từ nội dung
@@ -290,19 +310,7 @@ if __name__ == "__main__":
             
     print(f"Tổng số chunks đã phân tách: {len(tat_ca_chunks)}")
 
-    # # In thử các chunk từ nhánh Fallback (bất kể URL là gì)
-    # print("\n--- XEM TRƯỚC CHUNK TỪ NHÁNH FALLBACK (KHÔNG CÓ ĐIỀU) ---")
-    # dem_in = 0
-    # for c in tat_ca_chunks:
-    #     if "Doan_" in c["article_id"]: # Chỉ lấy các chunk từ nhánh fallback
-    #         print(json.dumps(c, ensure_ascii=False, indent=4))
-    #         dem_in += 1
-    #         if dem_in >= 3: # In 3 chunk để đánh giá
-    #             break
-                
-    # if dem_in == 0:
-    #     print("Toàn bộ dữ liệu đều có chứa chữ 'Điều X', không có trang nào rơi vào fallback.")
-    # print("------------------------------\n")
+
     
     # Tạo và lưu FAISS vector database
     db_folder = os.path.join(current_dir, "..", "data", "vector_db")

@@ -1,22 +1,25 @@
-import os
-
-os.environ["USE_TF"] = "0"
-os.environ["USE_JAX"] = "0"
+# import os
+# os.environ["USE_TF"] = "0"
+# os.environ["USE_JAX"] = "0"
+# Bỏ comment khi dùng Kaggle
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 class Generator:
 
+    # Khởi tạo Generator 
     def __init__(self, model_name = "Qwen/Qwen2.5-3B-Instruct"):
         print("Đang tải mô hình sinh văn bản")
+
+        # Tải tokenizer từ mô hình Qwen2.5-3B-Instruct
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        # Tải thẳng mô hình bằng float16, tận dụng VRAM rộng rãi của Kaggle T4, bỏ qua bitsandbytes
+        # tải mô hình ngôn ngữ
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float16,
-            device_map="auto"
+            device_map="auto" # Tự động phân bổ mô hình trên các thiết bị có sẵn (CPU/GPU)
         )
         print("Đã tải xong mô hình sinh văn bản")
 
@@ -95,24 +98,3 @@ class Generator:
 
         return response
 
-if __name__ == "__main__":
-    # Giả lập kết quả trả về từ retriever.py 
-    mock_retrieved_chunks = [
-        {
-            "chunk": {
-                "source": "Quy-chế-ĐTĐH-3626.pdf",
-                "text": "Điều 16. Học kỳ\nMỗi năm học có hai học kỳ chính và một học kỳ phụ. Mỗi học kỳ chính có 15 tuần học, từ 3 đến 4 tuần thi và 1 tuần dự phòng. Mỗi học kỳ phụ có ít nhất 5 tuần học và 1 tuần thi..."
-            }
-        }
-    ]
-    
-    cau_hoi_1 = "Học kỳ phụ có bao nhiêu tuần học?"
-    cau_hoi_2 = "Trường UET có cung cấp bữa ăn trưa miễn phí không?" # Câu hỏi cố tình gây nhiễu
-    
-    generator = Generator()
-    
-    print("\n--- Test Câu 1 ---")
-    print(generator.generate_answer(cau_hoi_1, mock_retrieved_chunks))
-    
-    print("\n--- Test Câu 2 (Anti-Hallucination) ---")
-    print(generator.generate_answer(cau_hoi_2, mock_retrieved_chunks))

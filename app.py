@@ -1,6 +1,7 @@
-import os
-os.environ["USE_TF"] = "0"
-os.environ["USE_JAX"] = "0"
+# import os
+# os.environ["USE_TF"] = "0"
+# os.environ["USE_JAX"] = "0"
+# Bỏ comment khi dùng Kaggle
 
 
 import streamlit as st
@@ -16,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS cho giao diện đẹp hơn
+# Tùy chỉnh CSS để cải thiện giao diện trò chuyện
 st.markdown("""
 <style>
     .stChatFloatingInputContainer {
@@ -30,10 +31,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- SIDEBAR -----------------
+# Sidebar
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/vi/thumb/9/93/Logo_UET.svg/1200px-Logo_UET.svg.png", width=150)
-    st.title("🎓 UET AI Assistant")
     st.markdown("""
     **Chào mừng bạn đến với Chatbot Tư vấn Sinh viên UET!**
     
@@ -53,7 +52,7 @@ with st.sidebar:
     st.divider()
     st.caption("© 2026 UET AI Research")
 
-# ----------------- MAIN UI -----------------
+# Main interface
 st.title("💬 Chatbot tư vấn sổ tay sinh viên UET")
 st.markdown("Hãy đặt bất kỳ câu hỏi nào về quy chế, học bổng, điểm rèn luyện... tại UET!")
 
