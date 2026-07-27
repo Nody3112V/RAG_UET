@@ -1,6 +1,6 @@
-# import os
-# os.environ["USE_TF"] = "0"
-# os.environ["USE_JAX"] = "0"
+import os
+os.environ["USE_TF"] = "0"
+os.environ["USE_JAX"] = "0"
 # Bỏ comment khi dùng Kaggle
 
 import torch
@@ -51,7 +51,8 @@ class Generator:
             "4. Không đưa ra lời khuyên ngoài lề. Không kết hợp thông tin lộn xộn.\n"
             "5. Luôn giữ nguyên ngữ cảnh của chủ thể được hỏi khi trả lời.\n"
             "6. Hãy tổng hợp thông tin và trả lời người dùng một cách tự nhiên. Tuyệt đối KHÔNG sử dụng các cụm từ như 'Theo tài liệu 1', 'Theo ngữ cảnh cung cấp', hay 'Dựa vào văn bản',...\n"
-            "7. Hãy đọc thật kỹ tên của các đối tượng (như tên học bổng, danh hiệu, điều luật) trong câu hỏi và đối chiếu chính xác tuyệt đối với tên trong ngữ cảnh. Không lấy điều kiện của đối tượng này gán cho đối tượng khác."
+            "7. Hãy đọc thật kỹ tên của các đối tượng (như tên học bổng, danh hiệu, điều luật) trong câu hỏi và đối chiếu chính xác tuyệt đối với tên trong ngữ cảnh. Không lấy điều kiện của đối tượng này gán cho đối tượng khác.\n"
+            "8. Khi phân tích dữ liệu dạng bảng (Markdown table), nếu ô tương ứng với đối tượng được hỏi bị để trống hoặc ghi không có thông tin, bạn phải kết luận là không có thông tin/lịch trình, tuyệt đối KHÔNG ĐƯỢC lấy thông tin của cột/hàng khác gán vào."
         )
 
         # Tạo danh sách các tin nhắn để cung cấp cho mô hình sinh văn bản

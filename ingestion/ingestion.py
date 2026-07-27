@@ -29,78 +29,45 @@ def loai_bo_muc_luc(noi_dung):
     return noi_dung  # không tìm thấy nội dung thật -> giữ nguyên, an toàn hơn là xóa nhầm
 
 # chia nhỏ văn bản thành các đoạn nhỏ
+#Tách văn bản theo các đoạn văn (paragraphs) bằng \\n\\n.
+# Gom nhóm các đoạn văn lại với nhau sao cho tổng độ dài không vượt quá chunk_size.
+# nếu một đoạn văn vượt quá chunk_size, không cắt ngang mà giữ nguyên thành một chunk độc lập để.
 def chia_nho_van_ban(text, chunk_size=800, chunk_overlap=100):
+    paragraphs = text.split('\n\n')
+    chunks = []
+    current_chunk = []
+    current_length = 0
 
-    # Định nghĩa các ký tự phân tách để chia nhỏ văn bản
-    separators = ['\n\n', '\n', '. ', ', ', ' ']
-
-    # Đệ quy để chia nhỏ văn bản dựa trên các ký tự phân tách
-    def split(text, separators):
-        if not text:
-            return []
-
-        if len(text) <= chunk_size:
-            return [text]
+    for p in paragraphs:
+        p = p.strip()
+        if not p:
+            continue
             
-        separator = separators[-1]
-        # Tìm ký tự phân tách đầu tiên xuất hiện trong văn bản
-        for sep in separators:
-            if sep == "":
-                separator = sep
-                break
-            if sep in text:
-                separator = sep
-                break
-                
-        if separator != "":
-            splits = text.split(separator)
-            splits = [s + separator for s in splits[:-1]] + [splits[-1]]
-        else:
-            splits = list(text)
-
-        # Lọc các đoạn nhỏ để đảm bảo chúng không vượt quá chunk_size, nếu vượt quá thì tiếp tục chia nhỏ
-        good_splits = []
-        for s in splits:
-            if len(s) > chunk_size and len(separators) > 1:
-                next_separators = separators[1:] if separator in separators else separators
-                good_splits.extend(split(s, next_separators))
-            else:
-                good_splits.append(s)
-        return good_splits
-
-    # Bắt đầu chia nhỏ văn bản
-    splits = split(text, separators)
-    
-    chunks = [] # danh sách các chunk cuối cùng
-    current_chunk = [] # danh sách các đoạn hiện tại đang được ghép lại
-    current_length = 0 # độ dài hiện tại của chunk đang được ghép
-
-    # Duyệt qua các đoạn nhỏ và ghép chúng lại thành các chunk có độ dài tối đa là chunk_size, với phần overlap là chunk_overlap
-    for s in splits:
-        if current_length + len(s) > chunk_size and current_length > 0:
-            # Nếu độ dài hiện tại vượt quá chunk_size, lưu chunk hiện tại và tạo phần overlap
-            chunks.append("".join(current_chunk).strip())
+        p_len = len(p)
+        
+        # Nếu thêm đoạn này vào vượt quá chunk_size và chunk hiện tại đã có dữ liệu
+        if current_length + p_len > chunk_size and current_length > 0:
+            chunks.append("\n\n".join(current_chunk))
             
-            # Tạo phần overlap
+            # Tạo phần overlap (lấy đoạn văn cuối cùng của chunk trước nếu phù hợp)
             overlap_chunk = []
-            overlap_length = 0
-            for item in reversed(current_chunk):
-                if overlap_length + len(item) > chunk_overlap and overlap_length > 0:
-                    break
-                overlap_chunk.insert(0, item)
-                overlap_length += len(item)
+            overlap_len = 0
+            if current_chunk:
+                last_p = current_chunk[-1]
+                if len(last_p) <= chunk_overlap:
+                    overlap_chunk.append(last_p)
+                    overlap_len = len(last_p)
             
             current_chunk = overlap_chunk
-            current_length = overlap_length
+            current_length = overlap_len
             
-        current_chunk.append(s)
-        current_length += len(s)
+        current_chunk.append(p)
+        current_length += p_len + 2 # +2 cho \n\n
 
-    # Nếu còn đoạn hiện tại chưa được lưu, lưu nó vào danh sách chunks    
     if current_chunk:
-        chunks.append("".join(current_chunk).strip())
+        chunks.append("\n\n".join(current_chunk))
         
-    return [c for c in chunks if c]
+    return chunks
 
 # Hàm tách văn bản theo chương
 def phan_tach_theo_chuong(noi_dung):

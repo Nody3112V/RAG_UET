@@ -19,7 +19,7 @@ class HybridRetriever:
         self.faiss_index = faiss.read_index(os.path.join(vector_db_path, "faiss_index.bin"))
 
         # tải mô hình embeddings
-        self.embeddings_model = SentenceTransformer('BAAI/bge-m3', model_kwargs={"use_safetensors": True})
+        self.embeddings_model = SentenceTransformer('BAAI/bge-m3')
 
         # chuẩn hóa nội dung văn bản để sử dụng với BM25
         tokenized_corpus = [chunk["text"].lower().strip().split() for chunk in self.metadata]
@@ -95,8 +95,8 @@ class HybridRetriever:
             chunk_id = item["chunk"]["chunk_id"]
             if chunk_id not in rrf_scores:
                 rrf_scores[chunk_id] = {"chunk": item["chunk"], "rrf_score": 0.0, "semantic_score": 0.0}
-            # Tăng trọng số cho BM25 lên 2.0 để ưu tiên các từ khóa chính xác (VD: "Sinh viên Xuất sắc", "Điều 16")
-            rrf_scores[chunk_id]["rrf_score"] += 2.0 / (k_rrf + item["rank"])
+            # Giảm trọng số cho BM25 xuống 0.5 để ưu tiên Semantic Search (tránh bị nhiễu bởi các từ rời rạc)
+            rrf_scores[chunk_id]["rrf_score"] += 0.5 / (k_rrf + item["rank"])
 
         # Sắp xếp các kết quả dựa trên điểm số RRF và lấy top_k kết quả
         sorted_results = sorted(rrf_scores.values(), key=lambda x: x["rrf_score"], reverse=True)

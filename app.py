@@ -1,8 +1,7 @@
-# import os
-# os.environ["USE_TF"] = "0"
-# os.environ["USE_JAX"] = "0"
+import os
+os.environ["USE_TF"] = "0"
+os.environ["USE_JAX"] = "0"
 # Bỏ comment khi dùng Kaggle
-
 
 import streamlit as st
 import os
@@ -17,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Tùy chỉnh CSS để cải thiện giao diện trò chuyện
+# Custom CSS 
 st.markdown("""
 <style>
     .stChatFloatingInputContainer {
@@ -31,8 +30,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar
+#SIDEBAR 
 with st.sidebar:
+    st.image("https://upload.wikimedia.org/wikipedia/vi/thumb/9/93/Logo_UET.svg/1200px-Logo_UET.svg.png", width=150)
+    st.title("🎓 UET AI Assistant")
     st.markdown("""
     **Chào mừng bạn đến với Chatbot Tư vấn Sinh viên UET!**
     
@@ -52,7 +53,7 @@ with st.sidebar:
     st.divider()
     st.caption("© 2026 UET AI Research")
 
-# Main interface
+# MAIN UI 
 st.title("💬 Chatbot tư vấn sổ tay sinh viên UET")
 st.markdown("Hãy đặt bất kỳ câu hỏi nào về quy chế, học bổng, điểm rèn luyện... tại UET!")
 
@@ -87,24 +88,24 @@ for message in st.session_state.chat_history:
                     st.markdown(f"- {src}")
 
 # Nhận câu hỏi từ người dùng và xử lý
-if promt := st.chat_input("Nhập câu hỏi của bạn (VD: Điều kiện nhận học bổng là gì?)..."):
+if prompt := st.chat_input("Nhập câu hỏi của bạn (VD: Điều kiện nhận học bổng là gì?)..."):
 
     # Hiển hiện câu hỏi người dùng
-    st.session_state.chat_history.append({"role": "user", "content": promt})
+    st.session_state.chat_history.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="🧑‍🎓"):
-        st.markdown(promt)
+        st.markdown(prompt)
 
     # Hiển thị thông báo đang tìm kiếm và sinh câu trả lời
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("⏳ Đang tìm kiếm thông tin và suy nghĩ..."):
             
             # Tìm kiếm các chunk liên quan đến câu hỏi của người dùng bằng phương pháp hybrid search
-            retrieved_chunks = retriever.hybrid_search(promt, top_k=3)
+            retrieved_chunks = retriever.hybrid_search(prompt, top_k=3)
 
             # Sinh câu trả lời dựa trên các chunk đã tìm được và câu hỏi của người dùng
             # Lấy lịch sử hội thoại (loại bỏ câu hỏi hiện tại ở cuối mảng)
             history = st.session_state.chat_history[:-1] if len(st.session_state.chat_history) > 1 else []
-            answer = generator.generate_answer(promt, retrieved_chunks, chat_history=history)
+            answer = generator.generate_answer(prompt, retrieved_chunks, chat_history=history)
 
             # Trích xuất thông tin nguồn
             sources = []
@@ -113,10 +114,18 @@ if promt := st.chat_input("Nhập câu hỏi của bạn (VD: Điều kiện nh�
                 article = items['chunk']['article_id']
                 chuong = items['chunk'].get('chuong', '')
                 
-                if chuong:
-                    citation = f"**{source_name}** ({chuong} - Mục: {article})"
+                url = items['chunk'].get('url', '')
+                
+                if url:
+                    if chuong:
+                        citation = f"[{source_name}]({url}) ({chuong} - Mục: {article})"
+                    else:
+                        citation = f"[{source_name}]({url}) (Mục: {article})"
                 else:
-                    citation = f"**{source_name}** (Mục: {article})"
+                    if chuong:
+                        citation = f"**{source_name}** ({chuong} - Mục: {article})"
+                    else:
+                        citation = f"**{source_name}** (Mục: {article})"
                     
                 if citation not in sources:
                     sources.append(citation)
