@@ -132,29 +132,15 @@ for message in st.session_state.chat_history:
         st.markdown(message["content"])
         if message.get("sources"):
             with st.expander("📚 Xem nguồn tham khảo", expanded=False):
-                for src in message["sources"]:
-                    st.markdown(f"- {src}")
+                for i, src in enumerate(message["sources"]):
+                    st.markdown(src)
+                    if i < len(message["sources"]) - 1:
+                        st.divider()
 
-# Hiển thị câu hỏi gợi ý khi chưa có lịch sử
-if len(st.session_state.chat_history) <= 1:
-    st.markdown("#### 💡 Câu hỏi gợi ý:")
-    cols = st.columns(2)
-    suggested_questions = [
-        "Điều kiện nhận học bổng loại Xuất sắc là gì?",
-        "Sinh viên bị cảnh báo học vụ khi nào?",
-        "Thời gian đào tạo tối đa là bao lâu?",
-        "Điều kiện để được xét tốt nghiệp?"
-    ]
-    for i, q in enumerate(suggested_questions):
-        with cols[i % 2]:
-            if st.button(f"❓ {q}", key=f"suggest_{i}", use_container_width=True):
-                st.session_state.suggested_prompt = q
-                st.rerun()
+
 
 prompt = st.chat_input("Nhập câu hỏi của bạn (VD: Điều kiện nhận học bổng là gì?)...")
-# Kiểm tra xem có câu hỏi gợi ý được chọn không
-if "suggested_prompt" in st.session_state:
-    prompt = st.session_state.pop("suggested_prompt")
+
 
 # Nhận câu hỏi từ người dùng và xử lý
 if prompt:
@@ -200,28 +186,15 @@ if prompt:
                 article = chunk['article_id']
                 chuong = chunk.get('chuong', '')
                 
-                # Ưu tiên dùng references, fallback về url
-                urls = chunk.get('references', [])
-                if not urls:
-                    url = chunk.get('url', '')
-                    urls = [url] if url else []
+                text_snippet = chunk.get('text', '').replace('\n', '\n> ')
                 
-                if urls:
-                    for url in urls:
-                        if chuong:
-                            citation = f"[{source_name}]({url}) ({chuong} - Mục: {article})"
-                        else:
-                            citation = f"[{source_name}]({url}) (Mục: {article})"
-                        if citation not in sources:
-                            sources.append(citation)
+                if chuong:
+                    citation = f"🔹 **{source_name}** ({chuong} - Mục: {article})\n> {text_snippet}"
                 else:
-                    if chuong:
-                        citation = f"**{source_name}** ({chuong} - Mục: {article})"
-                    else:
-                        citation = f"**{source_name}** (Mục: {article})"
-                    
-                    if citation not in sources:
-                        sources.append(citation)
+                    citation = f"🔹 **{source_name}** (Mục: {article})\n> {text_snippet}"
+                
+                if citation not in sources:
+                    sources.append(citation)
 
             # Nếu câu trả lời không đủ dữ liệu, xóa nguồn
             if "Tôi không có đủ dữ liệu" in answer:
@@ -231,8 +204,10 @@ if prompt:
             st.markdown(answer)
             if sources:
                 with st.expander("📚 Xem nguồn tham khảo", expanded=False):
-                    for src in sources:
-                        st.markdown(f"- {src}")
+                    for i, src in enumerate(sources):
+                        st.markdown(src)
+                        if i < len(sources) - 1:
+                            st.divider()
 
     # Cập nhật lịch sử trò chuyện 
     st.session_state.chat_history.append({"role": "assistant", "content": answer, "sources": sources})
