@@ -2,8 +2,31 @@ import os
 import pickle
 import faiss
 import numpy as np
+import re
+import logging
+import torch
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
+
+logger = logging.getLogger(__name__)
+
+VIETNAMESE_STOPWORDS = set([
+    "là", "và", "của", "có", "được", "trong", "cho", "với", "các", "để",
+    "này", "đó", "từ", "một", "theo", "về", "đã", "khi", "sẽ", "không",
+    "thì", "như", "hoặc", "hay", "cũng", "nếu", "đến", "bởi", "tại",
+    "vào", "ra", "lên", "xuống", "những", "mà", "nhưng", "còn", "rồi",
+    "nên", "do", "vì", "bị", "chỉ", "đều", "trên", "dưới", "giữa",
+    "trước", "sau", "qua"
+])
+
+# Token hoá tiếng việt để sử dụng với BM25
+def tokenize_vietnamese(text):
+    # Tokenize tiếng Việt cơ bản: lowercase, loại bỏ ký tự đặc biệt, loại stopwords
+    text = text.lower().strip()
+    text = re.sub(r'[^\w\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]', ' ', text)
+    tokens = text.split()
+    tokens = [t for t in tokens if t not in VIETNAMESE_STOPWORDS and len(t) > 1]
+    return tokens
 
 class HybridRetriever:
 
@@ -18,12 +41,23 @@ class HybridRetriever:
         # tải FAISS index
         self.faiss_index = faiss.read_index(os.path.join(vector_db_path, "faiss_index.bin"))
 
-        # tải mô hình embeddings
-        self.embeddings_model = SentenceTransformer('BAAI/bge-m3')
+        # tải mô hình embeddings (tối ưu VRAM: load lên CPU nếu CUDA khả dụng cho model lớn)
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        embed_device = 'cpu' if device == 'cuda' else device
+        self.embeddings_model = SentenceTransformer('BAAI/bge-m3', device=embed_device)
 
-        # chuẩn hóa nội dung văn bản để sử dụng với BM25
-        tokenized_corpus = [chunk["text"].lower().strip().split() for chunk in self.metadata]
-        self.bm25 = BM25Okapi(tokenized_corpus)
+        # chuẩn hóa nội dung văn bản để sử dụng với BM25, có sử dụng cache
+        bm25_path = os.path.join(vector_db_path, "bm25_index.pkl")
+        if os.path.exists(bm25_path):
+            print("Tải BM25 index từ cache...")
+            with open(bm25_path, 'rb') as f:
+                self.bm25 = pickle.load(f)
+        else:
+            print("Xây dựng BM25 index mới...")
+            tokenized_corpus = [tokenize_vietnamese(chunk["text"]) for chunk in self.metadata]
+            self.bm25 = BM25Okapi(tokenized_corpus)
+            with open(bm25_path, 'wb') as f:
+                pickle.dump(self.bm25, f)
 
         print("Đã tải xong dữ liệu và mô hình")
 
@@ -54,7 +88,7 @@ class HybridRetriever:
     # Hàm tìm kiếm dựa trên từ khóa sử dụng BM25
     def keyword_search(self, query, top_k=5):
         # Token hóa truy vấn 
-        tokenized_query = query.lower().strip().split()
+        tokenized_query = tokenize_vietnamese(query)
 
         # Tính điểm số BM25 cho từng chunk dựa trên truy vấn
         scores = self.bm25.get_scores(tokenized_query)
@@ -75,11 +109,16 @@ class HybridRetriever:
         return results
 
     # Hàm tìm kiếm kết hợp giữa semantic search và keyword search
-    def hybrid_search(self, query, top_k=5, k_rrf = 60):
+    def hybrid_search(self, query, top_k=5, k_rrf = 60, min_score=None, filters=None):
 
         # Kết quả từ tìm kiếm semantic và keyword
         semantic_results = self.semantic_search(query, top_k=top_k * 2)
         keyword_results = self.keyword_search(query, top_k=top_k * 2)
+        
+        # log các kết quả tìm kiếm
+        logger.info(f"Query: '{query}'")
+        logger.info("Semantic top 3: %s", [(r['chunk']['chunk_id'], round(float(r['score']), 4)) for r in semantic_results[:3]])
+        logger.info("BM25 top 3: %s", [(r['chunk']['chunk_id'], round(float(r['score']), 4)) for r in keyword_results[:3]])
 
         # Dictionary để lưu trữ điểm số RRF cho từng chunk
         rrf_scores = {}
@@ -103,5 +142,30 @@ class HybridRetriever:
 
         if not sorted_results:
             return []
+            
+        # Áp dụng filter metadata sau RRF
+        if filters:
+            filtered = []
+            for r in sorted_results:
+                match = True
+                for key, value in filters.items():
+                    if key in r["chunk"] and value.lower() not in str(r["chunk"].get(key, "")).lower():
+                        match = False
+                        break
+                if match:
+                    filtered.append(r)
+            sorted_results = filtered
+            
+        # Lọc theo ngưỡng điểm RRF tuyệt đối
+        if min_score is not None:
+            sorted_results = [r for r in sorted_results if r["rrf_score"] >= min_score]
+            
+        # Lọc theo tỷ lệ so với điểm cao nhất (adaptive threshold) để chống ảo giác
+        if sorted_results:
+            max_score = sorted_results[0]["rrf_score"]
+            threshold = max_score * 0.3  # Giữ kết quả có điểm ≥ 30% so với top 1
+            sorted_results = [r for r in sorted_results if r["rrf_score"] >= threshold]
+            
+        logger.info("RRF final top %d: %s", top_k, [(r['chunk']['chunk_id'], round(float(r['rrf_score']), 4)) for r in sorted_results[:top_k]])
             
         return sorted_results[:top_k]

@@ -4,6 +4,8 @@ import os
 import pickle
 import faiss
 import sys
+import hashlib
+import torch
 from sentence_transformers import SentenceTransformer
 from urllib.parse import unquote
 
@@ -26,54 +28,194 @@ def loai_bo_muc_luc(noi_dung):
     if match_noi_dung_that:
         vi_tri_bat_dau = match_muc_luc.end() + match_noi_dung_that.start()
         return noi_dung[:match_muc_luc.start()] + noi_dung[vi_tri_bat_dau:]
-    return noi_dung  # không tìm thấy nội dung thật -> giữ nguyên, an toàn hơn là xóa nhầm
+    return noi_dung  # không tìm thấy nội dung thật -> giữ nguyên
 
-# chia nhỏ văn bản thành các đoạn nhỏ
-#Tách văn bản theo các đoạn văn (paragraphs) bằng \\n\\n.
-# Gom nhóm các đoạn văn lại với nhau sao cho tổng độ dài không vượt quá chunk_size.
-# nếu một đoạn văn vượt quá chunk_size, không cắt ngang mà giữ nguyên thành một chunk độc lập để.
+# Cắt nhỏ văn bản đệ quy (Recursive Character Text Splitter)
+# Đảm bảo chia text thành các đoạn nhỏ không vượt quá chunk_size
+# đồng thời giữ lại phần trùng lặp (overlap) giữa các khối.
 def chia_nho_van_ban(text, chunk_size=800, chunk_overlap=100):
-    paragraphs = text.split('\n\n')
+    separators = ["\n\n", "\n", ". ", " ", ""]
+    
+    # Chia văn bản tránh việc có 1 đoạn quá dài
+    def split_text(text, separators):
+        # Tìm ký tự phân tách phù hợp nhất
+        separator = separators[-1]
+        next_separators = []
+        for i, sep in enumerate(separators):
+            if sep == "":
+                separator = sep
+                break
+            if sep in text:
+                separator = sep
+                next_separators = separators[i + 1:] #kí tự để cắt tiếp theo nếu văn bản còn quá dài
+                break
+
+        # Tách văn bản theo kí tự tách tìm được
+        splits = list(text) if separator == "" else text.split(separator)
+        
+        chunks = []
+        current_chunk = []
+        current_len = 0
+        _separator = separator if separator else ""
+        
+        # lặp qua các đoạn vừa tách
+        for s in splits:
+            if not s: # Bỏ qua các chuỗi rỗng
+                continue
+                
+            if len(s) > chunk_size: # 1 đoạn quá dài so với chunk_size 
+                # Nếu chunk hiện tại đang có dữ liệu, lưu lại thành 1 chunk hoàn chỉnh
+                if current_chunk:
+                    chunks.append(_separator.join(current_chunk))
+                    current_chunk = []
+                    current_len = 0
+                
+                # Gọi đệ quy để cắt đoạn dài này
+                if next_separators:
+                    chunks.extend(split_text(s, next_separators))
+                else:
+                    # Cắt theo chunk_size
+                    for i in range(0, len(s), chunk_size):
+                        chunks.append(s[i:i+chunk_size])
+            else:
+                s_len = len(s)
+                sep_len = len(_separator) if current_chunk else 0
+                
+                # Nếu thêm phần tử này vào làm vượt quá chunk_size
+                if current_len + sep_len + s_len > chunk_size and current_chunk:
+                    # Đóng gói chunk
+                    chunks.append(_separator.join(current_chunk))
+                    
+                    # Giữ lại một phần (overlap) cho chunk tiếp theo
+                    overlap_chunk = []
+                    overlap_len = 0
+                    for p in reversed(current_chunk):
+                        p_len = len(p)
+                        added_len = p_len + (len(_separator) if overlap_chunk else 0)
+                        if overlap_len + added_len > chunk_overlap:
+                            break
+                        overlap_chunk.insert(0, p)
+                        overlap_len += added_len
+                        
+                    current_chunk = overlap_chunk
+                    current_len = overlap_len
+                    sep_len = len(_separator) if current_chunk else 0
+                    
+                current_chunk.append(s)
+                current_len += s_len + sep_len
+                
+        if current_chunk:
+            chunks.append(_separator.join(current_chunk))
+            
+        return chunks
+
+    return split_text(text, separators)
+
+# tạo ID riêng cho từng chunk
+def tao_chunk_id(ten_tai_lieu, chuong, article_id):
+    parts = [ten_tai_lieu]
+    if chuong:
+        chuong_short = re.sub(r'[^a-zA-Z0-9IVXLC]', '', chuong.split('.')[0].replace(' ', ''))
+        parts.append(chuong_short)
+    parts.append(article_id)
+    base_id = "_".join(parts)
+    # tạo mã băm phân biệt các chunk trong trường hợp 1 điều khoản bị chia thành nhiều chunk
+    hash_id = hashlib.md5(base_id.encode('utf-8')).hexdigest()[:8]
+    return f"{base_id}_{hash_id}"
+
+def phan_tach_theo_khoan(noi_dung_dieu, tieu_de_dieu, ten_tai_lieu, url_nguon, chuong="", chunk_size=800, chunk_overlap=100):
+    pattern_khoan = r'(?:\n|^)(\d+)\.\s+' # (?:\n|^) -> Bắt đầu dòng mới hoặc bắt đầu đoạn -> (\d+) -> Một dãy số -> \. -> Dấu chấm -> \s+ -> Dấu cách.
+    khoan_parts = re.split(pattern_khoan, noi_dung_dieu)
+    if len(khoan_parts) <= 1:
+        return None
     chunks = []
-    current_chunk = []
-    current_length = 0
+    mo_dau = khoan_parts[0].strip() # phần mở đầu trước điều khoản 1 (nếu có)
+    current_text = f"{tieu_de_dieu}\n{mo_dau}" if mo_dau else tieu_de_dieu
+    for i in range(1, len(khoan_parts), 2): # nhảy 2 do 1 điều khoản gồm 2 phần: số điều khoản và nội dung điều khoản
+        so_khoan = khoan_parts[i]
+        noi_dung_khoan = khoan_parts[i + 1] if i + 1 < len(khoan_parts) else ""
+        khoan_text = f"{so_khoan}. {noi_dung_khoan.strip()}"
 
-    for p in paragraphs:
-        p = p.strip()
-        if not p:
-            continue
-            
-        p_len = len(p)
-        
-        # Nếu thêm đoạn này vào vượt quá chunk_size và chunk hiện tại đã có dữ liệu
-        if current_length + p_len > chunk_size and current_length > 0:
-            chunks.append("\n\n".join(current_chunk))
-            
-            # Tạo phần overlap (lấy đoạn văn cuối cùng của chunk trước nếu phù hợp)
-            overlap_chunk = []
-            overlap_len = 0
-            if current_chunk:
-                last_p = current_chunk[-1]
-                if len(last_p) <= chunk_overlap:
-                    overlap_chunk.append(last_p)
-                    overlap_len = len(last_p)
-            
-            current_chunk = overlap_chunk
-            current_length = overlap_len
-            
-        current_chunk.append(p)
-        current_length += p_len + 2 # +2 cho \n\n
-
-    if current_chunk:
-        chunks.append("\n\n".join(current_chunk))
-        
+        # Nếu chunk còn trống
+        if len(current_text) + len(khoan_text) + 1 <= chunk_size:
+            current_text += f"\n{khoan_text}"
+        else: # chunk đã đầy
+            if current_text.strip():
+                chunks.append(current_text.strip())
+            current_text = f"{tieu_de_dieu}\n{khoan_text}"
+    # thêm chunk cuối cùng
+    if current_text.strip():
+        chunks.append(current_text.strip())
     return chunks
+
+# Chia chunk đối với các tài liệu có cấu trúc heading
+def phan_tach_theo_heading(noi_dung, ten_tai_lieu, url_nguon, chuong="", chunk_size=800, chunk_overlap=100):
+    pattern = r'(?:\n|^)(#{1,3}\s+[^\n]+)' # Bắt đầu dòng mới hoặc bắt đầu đoạn -> (#{1,3}) -> Các heading từ H1 đến H3 -> (\s+) -> Dấu cách -> (\n+) -> Xuống dòng
+    parts = re.split(pattern, noi_dung)
+
+    # Nếu không có heading thì chia chunk theo bình thường
+    if len(parts) <= 1:
+        return chia_nho_van_ban(noi_dung, chunk_size, chunk_overlap)
+
+    # khởi tạo các biến
+    chunks = []
+    current_heading = ""
+    current_text = ""
+
+    for i, part in enumerate(parts):
+        part = part.strip()
+        if not part:
+            continue
+        
+        # Nếu là heading 
+        if re.match(r'^#{1,3}\s+', part):
+            if current_text.strip(): # nếu chunk đã có dữ liệu
+                full_text = f"{current_heading}\n{current_text}" if current_heading else current_text
+                if len(full_text) > chunk_size: # nếu chunk quá dài
+                    chunks.extend(chia_nho_van_ban(full_text, chunk_size, chunk_overlap))
+                else:
+                    chunks.append(full_text.strip())
+            current_heading = part
+            current_text = ""
+        else: # không phải heading
+            current_text += "\n" + part
+
+    # Thêm chunk cuối cùng
+    if current_text.strip():
+        full_text = f"{current_heading}\n{current_text}" if current_heading else current_text
+        if len(full_text) > chunk_size:
+            chunks.extend(chia_nho_van_ban(full_text, chunk_size, chunk_overlap))
+        else:
+            chunks.append(full_text.strip())
+    return chunks
+
+# Vẽ biểu đồ thống kê
+def thong_ke_chunks(chunks):
+    lengths = [len(c["text"]) for c in chunks]
+    if not lengths:
+        print("Không có chunk nào để thống kê.")
+        return
+    print(f"\n{'='*60}")
+    print(f"THỐNG KÊ CHUNKS:")
+    print(f"   - Tổng số chunks: {len(chunks)}")
+    print(f"   - Kích thước trung bình: {sum(lengths) / len(lengths):.0f} ký tự")
+    print(f"   - Nhỏ nhất: {min(lengths)} ký tự")
+    print(f"   - Lớn nhất: {max(lengths)} ký tự")
+    
+    ranges = [(0, 100), (100, 300), (300, 500), (500, 800), (800, float('inf'))]
+    for low, high in ranges:
+        count = sum(1 for l in lengths if low <= l < high)
+        label = f"{low}-{high}" if high != float('inf') else f"{low}+"
+        print(f"   - [{label}]: {count} chunks ({count/len(chunks)*100:.1f}%)")
+    print(f"{'='*60}")
 
 # Hàm tách văn bản theo chương
 def phan_tach_theo_chuong(noi_dung):
 
     # Mẫu regex để tìm các tiêu đề chương trong văn bản
     pattern_chuong = r"(?:\n|^)(Ch[uư][ơo]ng\s+[IVXLC\d]+[\.\s:]*[^\n]*)"
+    # (?:\n|^) -> bắt đầu dòng mới hoặc bắt đầu đoạn
+    # (Ch[uư][ơo]ng\s+[IVXLC\d]+[\.\s:]*[^\n]*) -> tiêu đề chương (Chương + số chương + nội dung chương)
 
     # chia nhỏ văn bản dựa trên mẫu regex, giữ lại tiêu đề chương và nội dung của chương
     parts = re.split(pattern_chuong, noi_dung)
@@ -91,28 +233,42 @@ def phan_tach_theo_chuong(noi_dung):
         ket_qua.append((tieu_de_chuong, noi_dung_chuong))
     return ket_qua
 
-# Ham tách văn bản theo điều
-def phan_tach_theo_dieu(noi_dung, ten_tai_lieu, url_nguon, chuong=""):
+# Ham tách văn bản theo điều (kết hợp với cắt nhỏ đệ quy)
+def phan_tach_theo_dieu(noi_dung, ten_tai_lieu, url_nguon, chuong="", chunk_size=800, chunk_overlap=100):
 
     # chứa các doạn văn bản được tách ra từ nội dung
     chunks = []
 
-    # Tìm kiếm tất cả các điều trong nội dung
-    pattern = r"(?:\n|^)(Điều\s+\d+[\.\s:]?)"
+    # Tìm kiếm tất cả các điều trong nội dung 
+    pattern = r"(?:\n|^)(?:#{1,4}\s+)?(?:\*{1,2})?(Điều\s+\d+[\.\s:\-\)]*[^\n]*)(?:\*{1,2})?"
+    # đàu dòng -> (\n|^)
+    # heading (từ H1 đến H4) -> (?:#{1,4}\s+)?
+    # bold -> (?:\*{1,2})?
+    # điều ->Điều
+    # số điều -> \d+
+    # khoảng cách -> [\.\s:\-\)]*
+    # nội dung điều -> [^\n]*
+    # dấu * ở cuối -> (?:\*{1,2})?
 
     # Tách nội dung thành các phần dựa trên mẫu regex
+    # parts có dạng: [phần mở đầu, điều 1, nội dung điều 1, điều 2, nội dung điều 2, ...]
     parts = re.split(pattern, noi_dung)
 
+    # Nếu không có điều nào được tìm thấy, chia nhỏ theo heading
     if len(parts) == 1:
-        text_chunks = chia_nho_van_ban(noi_dung, chunk_size=800, chunk_overlap=100)
+        # chia nhỏ theo heading
+        text_chunks = phan_tach_theo_heading(noi_dung, ten_tai_lieu, url_nguon, chuong, chunk_size, chunk_overlap)
         
         for idx, text_chunk in enumerate(text_chunks, 1):
+            # không có điều nên gắn ID theo đoạn
+            article_id = f"Đoạn_{idx}"
+            chunk_id = tao_chunk_id(ten_tai_lieu, chuong, article_id)
             chunk = {
-                "chunk_id": f"{ten_tai_lieu}_Doan_{idx}",
-                "article_id": f"Doan_{idx}",
+                "chunk_id": chunk_id,
+                "article_id": article_id,
                 "source": ten_tai_lieu,
                 "url": url_nguon,
-                "text": re.sub(r'\n+', '\n', text_chunk).strip()
+                "text": re.sub(r'\n+', '\n', text_chunk).strip() # xoá dòng trống
             }
             if chuong:
                 chunk["chuong"] = chuong
@@ -123,16 +279,20 @@ def phan_tach_theo_dieu(noi_dung, ten_tai_lieu, url_nguon, chuong=""):
     # Nếu phần đầu tiên không rỗng, thêm nó vào danh sách chunks với article_id là "LoiNoiDau"
     phan_mo_dau = parts[0].strip()
     if phan_mo_dau:
-        chunk = {
-            "chunk_id": f"{ten_tai_lieu}_LoiNoiDau",
-            "article_id": "LoiNoiDau",
-            "source": ten_tai_lieu,
-            "url": url_nguon,
-            "text": re.sub(r'\n+', '\n', phan_mo_dau).strip()
-        }
-        if chuong:
-            chunk["chuong"] = chuong
-        chunks.append(chunk)
+        text_chunks = chia_nho_van_ban(phan_mo_dau, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        for idx, text_chunk in enumerate(text_chunks, 1):
+            article_id = "LoiNoiDau" if len(text_chunks) == 1 else f"LoiNoiDau_Phan_{idx}"
+            chunk_id = tao_chunk_id(ten_tai_lieu, chuong, article_id)
+            chunk = {
+                "chunk_id": chunk_id,
+                "article_id": article_id,
+                "source": ten_tai_lieu,
+                "url": url_nguon,
+                "text": re.sub(r'\n+', '\n', text_chunk).strip()
+            }
+            if chuong:
+                chunk["chuong"] = chuong
+            chunks.append(chunk)
 
     # Duyệt qua các phần còn lại, mỗi điều sẽ có tiêu đề và nội dung điều
     for i in range(1, len(parts), 2):
@@ -143,29 +303,45 @@ def phan_tach_theo_dieu(noi_dung, ten_tai_lieu, url_nguon, chuong=""):
         else:
             noi_dung_dieu = ""
 
-        # Trích xuất tiêu đề
+        # Trích xuất số điều
         so_dieu_match = re.search(r"\d+", tieu_de)
         if so_dieu_match:
             so_dieu = so_dieu_match.group()
         else:
             so_dieu = "X"
-        article_id = f"Điều_{so_dieu}"
+        base_article_id = f"Điều_{so_dieu}"
 
         # Kết hợp tiêu đề và nội dung điều để 
-        noi_dung = f"{tieu_de} {noi_dung_dieu}".strip()
-        noi_dung = re.sub(r'\n+', '\n', noi_dung)  # Loại bỏ các dòng trống thừa
-
-        # Biến thành cấu trúc dictionary và thêm vào danh sách chunks
-        chunk = {
-            "chunk_id": f"{ten_tai_lieu}_{article_id}",
-            "article_id": article_id,
-            "source": ten_tai_lieu,
-            "url": url_nguon,
-            "text": noi_dung
-        }
-        if chuong:
-            chunk["chuong"] = chuong
-        chunks.append(chunk)
+        noi_dung = f"{tieu_de}\n{noi_dung_dieu}".strip()
+        
+        # Thử phân tách theo khoản
+        khoan_chunks = phan_tach_theo_khoan(noi_dung_dieu, tieu_de, ten_tai_lieu, url_nguon, chuong, chunk_size, chunk_overlap)
+        
+        text_chunks = []
+        if khoan_chunks is not None:
+            for kc in khoan_chunks:
+                if len(kc) > chunk_size: # Nếu khoản quá dài
+                    text_chunks.extend(chia_nho_van_ban(kc, chunk_size=chunk_size, chunk_overlap=chunk_overlap))
+                else: # Nếu khoản vừa đủ
+                    text_chunks.append(kc)
+        else: # không cắt theo khoản được
+            text_chunks = chia_nho_van_ban(noi_dung, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        
+        for idx, text_chunk in enumerate(text_chunks, 1):
+            article_id = base_article_id if len(text_chunks) == 1 else f"{base_article_id}_Phan_{idx}"
+            chunk_id = tao_chunk_id(ten_tai_lieu, chuong, article_id)
+            
+            # Biến thành cấu trúc dictionary và thêm vào danh sách chunks
+            chunk = {
+                "chunk_id": chunk_id,
+                "article_id": article_id,
+                "source": ten_tai_lieu,
+                "url": url_nguon,
+                "text": re.sub(r'\n+', '\n', text_chunk).strip()
+            }
+            if chuong:
+                chunk["chuong"] = chuong
+            chunks.append(chunk)
 
     return chunks
 
@@ -182,8 +358,9 @@ def tao_luu_vector_db(chunks, folder_luu):
 
     print(f"Đang tạo embeddings cho {len(texts)} chunks")
 
-    # dùng mô hình để tạo embeddings cho các văn bản, đồng thời chuẩn hóa embeddings để có độ dài bằng 1
-    embeddings = model.encode(texts, show_progress_bar=True, normalize_embeddings=True, batch_size=16)
+    #tạo embeddings cho các văn bản, đồng thời chuẩn hóa embeddings để có độ dài bằng 1
+    batch_size = 32 if torch.cuda.is_available() else 16
+    embeddings = model.encode(texts, show_progress_bar=True, normalize_embeddings=True, batch_size=batch_size)
 
     # xác định số chiều của embeddings
     dim = embeddings.shape[1]
@@ -201,11 +378,17 @@ def tao_luu_vector_db(chunks, folder_luu):
 
     faiss.write_index(index, os.path.join(folder_luu, "faiss_index.bin"))
 
-    # lưu metadata (các chunks) vào file pickle để có thể truy xuất sau này
+    # lưu metadata (các chunks) vào file pickle 
     with open(os.path.join(folder_luu, "metadata.pkl"), 'wb') as f:
         pickle.dump(chunks, f)
 
-    print(f"Đã lưu FAISS index và metadata vào thư mục: {folder_luu}")
+    # Lưu chunks ra JSON để kiểm tra
+    chunks_json_path = os.path.join(folder_luu, "chunks.json")
+    with open(chunks_json_path, "w", encoding="utf-8") as f:
+        json.dump(chunks, f, ensure_ascii=False, indent=2)
+    print(f"Đã lưu {len(chunks)} chunks vào: {chunks_json_path}")
+
+    print(f"Đã lưu FAISS index, metadata và chunks.json vào thư mục: {folder_luu}")
 
 
 if __name__ == "__main__":
@@ -243,7 +426,7 @@ if __name__ == "__main__":
             danh_sach_chuong = phan_tach_theo_chuong(noi_dung_sach)
             for chuong_title, noi_dung_chuong in danh_sach_chuong:
                 chunks_web = phan_tach_theo_dieu(noi_dung_chuong, source, url_bai_viet, chuong=chuong_title)
-                # Cập nhật references cho bài viết web
+                # Cập nhật các đường dẫn nguồn cho bài viết web
                 for chunk in chunks_web:
                     chunk["references"] = [url_bai_viet]
                 tat_ca_chunks.extend(chunks_web)
@@ -261,7 +444,7 @@ if __name__ == "__main__":
                 if url_bai_viet not in files_dinh_kem[url_file]["references"]:
                     files_dinh_kem[url_file]["references"].append(url_bai_viet)
                     
-    # 3. Tiến hành tách chunk cho các file đính kèm (đã deduplicate)
+    # 3. Tiến hành tách chunk cho các file đính kèm
     for url_file, file_info in files_dinh_kem.items():
         noi_dung_file = file_info["noi_dung_file"]
         if noi_dung_file:
@@ -275,10 +458,16 @@ if __name__ == "__main__":
                     chunk["references"] = file_info["references"]
                 tat_ca_chunks.extend(chunks_file)
             
-    print(f"Tổng số chunks đã phân tách: {len(tat_ca_chunks)}")
+    print(f"Tổng số chunks đã phân tách ban đầu: {len(tat_ca_chunks)}")
 
+    # Lọc chunks quá nhỏ (Issue 7)
+    MIN_CHUNK_LENGTH = 20
+    tat_ca_chunks = [c for c in tat_ca_chunks if len(c["text"].strip()) >= MIN_CHUNK_LENGTH]
+    print(f"Tổng số chunks sau khi lọc (< {MIN_CHUNK_LENGTH} ký tự): {len(tat_ca_chunks)}")
 
-    
+    # Thống kê phân bổ (Issue 6)
+    thong_ke_chunks(tat_ca_chunks)
+
     # Tạo và lưu FAISS vector database
     db_folder = os.path.join(current_dir, "..", "data", "vector_db")
     tao_luu_vector_db(tat_ca_chunks, db_folder)

@@ -5,7 +5,7 @@ Hệ thống Chatbot hỏi đáp tự động cho Sổ tay sinh viên UET dựa 
 ## 🏗️ Kiến trúc Hệ thống
 
 Hệ thống được thiết kế theo cấu trúc mô-đun hóa:
-- **Crawler (`crawler/crawler.py`)**: Công cụ tự động thu thập toàn bộ dữ liệu từ `https://handbook.uet.vnu.edu.vn/`, tự động phát hiện và trích xuất nội dung từ các file `PDF`, `DOCX` bằng OCR (`pytesseract`, `pdfplumber`).
+- **Crawler (`crawler/crawler.py`)**: Công cụ tự động thu thập toàn bộ dữ liệu từ `https://handbook.uet.vnu.edu.vn/`, tự động phát hiện và trích xuất nội dung từ các file `PDF`, `DOCX` bằng OCR (`pytesseract`, `pymupdf4llm`).
 - **Ingestion (`ingestion/ingestion.py`)**: Phân tách văn bản thông minh theo định dạng (Chương - Điều - Khoản). Sử dụng mô hình `BAAI/bge-m3` để nhúng (embedding) và lưu trữ cục bộ dưới dạng vector với FAISS (`faiss-cpu`).
 - **Retriever (`retriever/retriever.py`)**: Thiết kế bộ truy hồi thông minh sử dụng **Hybrid Search**, kết hợp Keyword Search (`BM25`) và Semantic Search (Cosine Similarity trên FAISS), sau đó gộp điểm và xếp hạng lại bằng công thức **RRF (Reciprocal Rank Fusion)**.
 - **Generator (`generator/generator.py`)**: Sử dụng Mô hình Ngôn ngữ Lớn (LLM) `Qwen/Qwen2.5-3B-Instruct` để sinh ra câu trả lời tiếng Việt mượt mà. Hệ thống Prompt được tinh chỉnh nghiêm ngặt để **chống ảo tưởng thông tin (Anti-Hallucination)**.

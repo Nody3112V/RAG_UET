@@ -3,7 +3,7 @@ import json
 import requests
 import time
 import random
-import pdfplumber
+import pymupdf4llm
 import pytesseract
 import re
 import hashlib
@@ -14,9 +14,16 @@ import numpy as np
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, urldefrag, unquote, quote
 from docx import Document
+from docx.document import Document as _Document
+from docx.oxml.text.paragraph import CT_P
+from docx.oxml.table import CT_Tbl
+from docx.table import _Cell, Table
+from docx.text.paragraph import Paragraph
 from pdf2image import convert_from_path
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from collections import deque
+from markdownify import markdownify as md
 
 # Tạo thư mục tạm để lưu file PDF, DOCX tải về
 LUU_TAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "raw", "file_tam")
@@ -33,37 +40,20 @@ session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 })
+
+# Cấu hình retry cho session requests tự động thử lại khi gặp lỗi tạm thời như 429, 500, 502, 503, 504
 retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
 session.mount("https://", HTTPAdapter(max_retries=retry))
 session.mount("http://", HTTPAdapter(max_retries=retry))
 
 # chuẩn hoá các URL giống nhau nhưng khác nhau về định dạng, ví dụ: https://example.com và https://example.com/ sẽ được chuẩn hoá thành https://example.com
 def normalize_url(url):
-    parsed = urlparse(url)
+    parsed = urlparse(url) 
     path = unicodedata.normalize('NFC', parsed.path)
     clean_url = f"{parsed.scheme}://{parsed.netloc}{path}"
     # Loại bỏ dấu gạch chéo ở cuối URL
     return clean_url.rstrip('/')
 
-# Chuyển nội dung pdf scan sang văn bản sử dụng OCR
-def chuyen_pdf_scan_sang_van_ban(duong_dan_file):
-    text_ocr = ""
-    try:
-        print(f"Đang chuyển PDF scan sang văn bản: {duong_dan_file}")
-        # Sử dụng thư viện pdf2image để chuyển PDF scan sang hình ảnh
-        images = convert_from_path(duong_dan_file, dpi = 300)
-
-        # Duyệt qua từng hình ảnh
-        for stt, image in enumerate(images):
-            text = pytesseract.image_to_string(image, lang='vie')  # sử dụng ngôn ngữ tiếng Việt
-            if text:
-                text_ocr += text + "\n"
-                print(f"Thu thập thành công trang {stt + 1} của tài liệu PDF bằng OCR")
-        return text_ocr
-
-    except Exception as e:
-        print(f"Lỗi khi chuyển PDF scan sang hình ảnh: {e}")
-        return None
 
 # Kiểm tra xem văn bản có phải là rác hay không, dựa trên tỷ lệ ký tự chữ và số trên tổng chiều dài văn bản
 def is_garbage_text(text):
@@ -84,11 +74,25 @@ def tien_xu_ly_anh(image):
         print(f"Lỗi tiền xử lý ảnh: {e}")
         return image
 
-# Thay thế các ký tự đặc biệt, khoảng trắng thừa và dòng trống thừa trong văn bản
+# duyệt qua tất cả các block (đoạn văn và bảng biểu) trong file DOCX
+def iter_block_items(parent):
+    if isinstance(parent, _Document):
+        parent_elm = parent.element.body
+    elif isinstance(parent, _Cell):
+        parent_elm = parent._tc
+    else:
+        raise ValueError("something's not right")
+
+    for child in parent_elm.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
+
 def lam_sach_van_ban(text):
-    text = text.replace('\f', '\n')
-    text = re.sub(r'\n{3,}', '\n\n', text)          # gộp nhiều dòng trống
-    text = re.sub(r'[ \t]{2,}', ' ', text)           # gộp khoảng trắng thừa
+    text = text.replace('\f', '\n')                 # chuyển kí tự ngăn trang thành xuống dòng
+    text = re.sub(r'\n{3,}', '\n\n', text)          # từ 3 dấu xuống dòng trở lên -> 2 dấu xuống dòng thành đoạn văn
+    text = re.sub(r'[ \t]{2,}', ' ', text)           # 2 khoảng trắng trở lên -> 1 khoảng trắng
     return text.strip()
 
 # tải file từ một URL, trích xuất nội dung văn bản từ file PDF hoặc DOCX, sau đó xóa file tạm và trả về nội dung văn bản đã trích xuất
@@ -146,39 +150,21 @@ def truy_xuat_van_ban_tu_file_url(file_url):
                 except Exception:
                     images = []
 
-                # Mở file PDF và trích xuất văn bản từ từng trang
-                with pdfplumber.open(duong_dan_file) as pdf:
-                    for stt, trang in enumerate(pdf.pages):
-                        text_trang = trang.extract_text()
-
-                        # Trích xuất bảng biểu bằng pdfplumber và chuyển thành Markdown
-                        tables = trang.extract_tables()
-                        md_tables = ""
-                        if tables:
-                            for table in tables:
-                                if not table: continue
-                                md_tables += "\n"
-                                for row_idx, row in enumerate(table):
-                                    cleaned_row = [str(cell).replace('\n', ' ').replace('|', '-').strip() if cell else "" for cell in row]
-                                    md_tables += "| " + " | ".join(cleaned_row) + " |\n"
-                                    if row_idx == 0:
-                                        md_tables += "|" + "|".join(["---"] * len(cleaned_row)) + "|\n"
-                                md_tables += "\n"
-
-                        # Nếu trang chỉ có chữ VÀ không phải là rác
-                        if text_trang and text_trang.strip() and not is_garbage_text(text_trang):
-                            text_trich_xuat += text_trang + "\n"
-                            if md_tables:
-                                text_trich_xuat += md_tables
-                        elif stt < len(images):
-                            # Nếu trang không có chữ hoặc là rác -> OCR 
-                            print(f"Trang {stt+1} của file {ten_file} không có chữ hoặc là rác -> chạy OCR")
-                            img_processed = tien_xu_ly_anh(images[stt])
-                            text_ocr = pytesseract.image_to_string(img_processed, lang='vie', config='--oem 1 --psm 6') 
-                            text_trich_xuat += text_ocr + "\n"
-                            if md_tables:
-                                text_trich_xuat += md_tables
-                            print(f"Thu thập thành công trang {stt+1} của file {ten_file} bằng OCR")
+                # Trích xuất Markdown từng trang với pymupdf4llm (đã bao gồm bảng biểu đúng vị trí)
+                md_docs = pymupdf4llm.to_markdown(duong_dan_file, page_chunks=True)
+                for stt, page_data in enumerate(md_docs):
+                    text_trang = page_data.get("text", "")
+                    
+                    # Nếu trang có nội dung hợp lệ
+                    if text_trang and text_trang.strip() and not is_garbage_text(text_trang):
+                        text_trich_xuat += text_trang + "\n"
+                    elif stt < len(images):
+                        # Nếu trang không có chữ hoặc là rác -> OCR (PDF dạng scan)
+                        print(f"Trang {stt+1} của file {ten_file} không có chữ hoặc là rác -> chạy OCR")
+                        img_processed = tien_xu_ly_anh(images[stt])
+                        text_ocr = pytesseract.image_to_string(img_processed, lang='vie', config='--oem 1 --psm 6') 
+                        text_trich_xuat += text_ocr + "\n"
+                        print(f"Thu thập thành công trang {stt+1} của file {ten_file} bằng OCR")
             except Exception as e:
                 print(f"Lỗi khi trích xuất PDF: {e}")
                 return None, None
@@ -186,24 +172,25 @@ def truy_xuat_van_ban_tu_file_url(file_url):
         # DOCX
         elif ten_file.lower().endswith(".docx"):
             try:
-                # Mở file DOCX và trích xuất văn bản từ từng đoạn
+                # Mở file DOCX và duyệt tuần tự từng khối (văn bản và bảng biểu)
                 doc = Document(duong_dan_file)
-                for doan in doc.paragraphs:
-                    if doan.text.strip():
-                        text_trich_xuat += doan.text.strip() + "\n"
-                
-                # Trích xuất văn bản từ bảng biểu (tables) và chuyển thành Markdown
-                for table in doc.tables:
-                    text_trich_xuat += "\n"
-                    for row_idx, row in enumerate(table.rows):
-                        row_data = []
-                        for cell in row.cells:
-                            text_cell = cell.text.strip().replace("\n", " ").replace("|", "-")
-                            row_data.append(text_cell)
-                        text_trich_xuat += "| " + " | ".join(row_data) + " |\n"
-                        if row_idx == 0:
-                            text_trich_xuat += "|" + "|".join(["---"] * len(row_data)) + "|\n"
-                    text_trich_xuat += "\n"
+                for block in iter_block_items(doc):
+                    # Nếu là đoạn văn bản (Paragraph)
+                    if isinstance(block, Paragraph):
+                        if block.text.strip():
+                            text_trich_xuat += block.text.strip() + "\n"
+                    # Nếu là bảng biểu (Table)
+                    elif isinstance(block, Table):
+                        text_trich_xuat += "\n"
+                        for row_idx, row in enumerate(block.rows):
+                            row_data = []
+                            for cell in row.cells:
+                                text_cell = cell.text.strip().replace("\n", " ").replace("|", "-")
+                                row_data.append(text_cell)
+                            text_trich_xuat += "| " + " | ".join(row_data) + " |\n"
+                            if row_idx == 0:
+                                text_trich_xuat += "|" + "|".join(["---"] * len(row_data)) + "|\n"
+                        text_trich_xuat += "\n"
             except Exception as e:
                 print(f"Lỗi khi trích xuất DOCX: {e}")
                 return None, None
@@ -220,18 +207,12 @@ def truy_xuat_van_ban_tu_file_url(file_url):
                 os.remove(duong_dan_file)
             return None, None
         
-        # Nếu nội dung trích xuất từ file rỗng, thử OCR nếu là PDF scan
+        # Kiểm tra nội dung trích xuất cuối cùng
         if not text_trich_xuat.strip():
-            print(f"Nội dung trích xuất từ file {ten_file} rỗng, thử OCR nếu là PDF scan")
-            if ten_file.lower().endswith(".pdf"):
-                text_ocr = chuyen_pdf_scan_sang_van_ban(duong_dan_file)
-                if text_ocr and text_ocr.strip():
-                    text_trich_xuat = text_ocr
-                else:
-                    print(f"Không thể trích xuất nội dung từ file PDF scan: {ten_file}")
-                    if os.path.exists(duong_dan_file):
-                        os.remove(duong_dan_file)  # xóa file tạm
-                    return None, None
+            print(f"File {ten_file} không có nội dung hợp lệ hoặc không thể trích xuất.")
+            if os.path.exists(duong_dan_file):
+                os.remove(duong_dan_file)  # xóa file tạm
+            return None, None
 
         # Xóa file tạm sau khi trích xuất xong
         if os.path.exists(duong_dan_file):
@@ -266,7 +247,7 @@ def trich_xuat_noi_dung_trang_web(url, cache_van_ban):
             title = "Không có tiêu đề"
 
         # Tìm, lấy nội dung chính của trang web 
-        lay_noi_dung = soup.find('article') or soup.find('main') or soup.find('div', class_='entry-content') or soup.find('body')
+        lay_noi_dung = soup.find('div', class_='main-content') or soup.find('article') or soup.find('main') or soup.find('div', class_='entry-content') or soup.find('body')
         # nối tất cả đoạn văn từ các thẻ cách nhau bằng dấu xuống dòng
         if lay_noi_dung:
             # xóa tất cả các thẻ script và style để tránh lấy nội dung không mong muốn
@@ -286,13 +267,13 @@ def trich_xuat_noi_dung_trang_web(url, cache_van_ban):
             for rac in lay_noi_dung.find_all(class_=pattern_rac):
                 rac.decompose()
 
-            noi_dung = lay_noi_dung.get_text(separator="\n", strip=True)
+            noi_dung = md(str(lay_noi_dung), heading_style="ATX", strip=['img', 'script', 'style'])
         else:
             noi_dung = ""
 
         # trích xuất các liên kết đến file PDF hoặc DOCX từ trang web
         van_ban_dinh_kem = []
-        link_thuong = []  # tập hợp các liên kết trong trang web
+        link_dinh_kem = []  # tập hợp các liên kết trong trang web
 
         # a là các thẻ chứa liên kết, href là thuộc tính chứa đường dẫn của liên kết
         links = soup.find_all('a', href=True)
@@ -351,14 +332,14 @@ def trich_xuat_noi_dung_trang_web(url, cache_van_ban):
                     else:
                         cache_van_ban[full_url] = None  # đánh dấu là đã thử tải nhưng lỗi
             else:
-                link_thuong.append(full_url)
+                link_dinh_kem.append(full_url)
         return {
             "loai": "trang_web",
             "url": url,
             "title": title,
             "noi_dung": noi_dung,
             "van_ban_dinh_kem": van_ban_dinh_kem,
-            "link_thuong": link_thuong
+            "link_dinh_kem": link_dinh_kem
         }
     except Exception as e:
         print(f"Lỗi khi truy cập trang web {url}: {e}")
@@ -376,13 +357,14 @@ def thu_thap(start_url, max_pages = None):
             data = json.load(f)
             visiteds_urls = set(data.get("visiteds_urls", []))
             cache_van_ban = data.get("cache_van_ban", {})
-            queue = data.get("queue", [])
+            queue = deque(data.get("queue", []))
+            queue_set = set(queue)
             results = data.get("results", [])
     else:
         visiteds_urls = set()  # tập hợp các URL đã truy cập
         cache_van_ban = {}  # dict cache nội dung các file PDF/DOCX đã tải
         start_url = normalize_url(start_url)  # chuẩn hoá URL gốc
-        queue = [start_url]  # hàng đợi các URL cần truy cập
+        queue = deque([start_url])  # hàng đợi các URL cần truy cập
         queue_set = set(queue) # Set để kiểm tra O(1)
         results = []  # danh sách kết quả thu thập
         
@@ -409,7 +391,7 @@ def thu_thap(start_url, max_pages = None):
             print(f"Đã đạt giới hạn số lượng trang cần crawl: {max_pages}")
             break
 
-        current_url = queue.pop(0)
+        current_url = queue.popleft()
 
         if current_url in visiteds_urls:
             continue
@@ -422,7 +404,7 @@ def thu_thap(start_url, max_pages = None):
         page_data = trich_xuat_noi_dung_trang_web(current_url, cache_van_ban)
         # kiểm tra nếu page_data không rỗng và có nội dung hoặc văn bản đính kèm, có thì thêm vào kết quả
         if page_data:
-            next_links = page_data.pop("link_thuong", [])
+            next_links = page_data.pop("link_dinh_kem", [])
 
             if page_data.get("noi_dung") or page_data.get("van_ban_dinh_kem"):
                 results.append(page_data)
@@ -452,7 +434,7 @@ def thu_thap(start_url, max_pages = None):
                     json.dump({
                         "visiteds_urls": list(visiteds_urls),
                         "cache_van_ban": cache_van_ban,
-                        "queue": queue,
+                        "queue": list(queue),
                         "results": results
                     }, f, ensure_ascii=False, indent=4)
             except Exception as e:
@@ -473,3 +455,12 @@ if __name__ == "__main__":
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(final_data, f, ensure_ascii=False, indent=4)
     print(f"Đã lưu kết quả vào file {output_path}")
+    
+    # Thống kê
+    total_pages = len(final_data)
+    total_files = sum(len(d.get("van_ban_dinh_kem", [])) for d in final_data)
+    print(f"\n{'='*60}")
+    print(f"   THỐNG KÊ CRAWL:")
+    print(f"   - Tổng số trang web: {total_pages}")
+    print(f"   - Tổng số file đính kèm: {total_files}")
+    print(f"{'='*60}")

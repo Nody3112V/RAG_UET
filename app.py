@@ -4,7 +4,6 @@ os.environ["USE_JAX"] = "0"
 # Bỏ comment khi dùng Kaggle
 
 import streamlit as st
-import os
 from retriever.retriever import HybridRetriever
 from generator.generator import Generator
 
@@ -19,13 +18,62 @@ st.set_page_config(
 # Custom CSS 
 st.markdown("""
 <style>
+    /* Gradient header */
+    .stTitle {
+        background: linear-gradient(135deg, #1e3a5f, #2980b9);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
+    }
+    
+    /* Chat container */
     .stChatFloatingInputContainer {
         padding-bottom: 20px;
+        border-top: 2px solid #e0e0e0;
     }
+    
+    /* Chat messages */
     .stChatMessage {
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
+        border-radius: 12px;
+        padding: 12px 16px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    }
+    [data-testid="stSidebar"] * {
+        color: #e0e0e0 !important;
+    }
+    [data-testid="stSidebar"] h1 {
+        color: #ffffff !important;
+    }
+    
+    /* Input box */
+    .stChatInput textarea {
+        border-radius: 20px !important;
+        border: 2px solid #2980b9 !important;
+    }
+    
+    /* Expander cho nguồn tham khảo */
+    .streamlit-expanderHeader {
+        background-color: #f0f7ff;
+        border-radius: 8px;
+        font-size: 0.9em;
+    }
+    
+    /* Button styling */
+    .stButton > button {
+        border-radius: 20px;
+        border: 1px solid #e74c3c;
+        color: #e74c3c;
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        background-color: #e74c3c;
+        color: white;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -87,8 +135,29 @@ for message in st.session_state.chat_history:
                 for src in message["sources"]:
                     st.markdown(f"- {src}")
 
+# Hiển thị câu hỏi gợi ý khi chưa có lịch sử
+if len(st.session_state.chat_history) <= 1:
+    st.markdown("#### 💡 Câu hỏi gợi ý:")
+    cols = st.columns(2)
+    suggested_questions = [
+        "Điều kiện nhận học bổng loại Xuất sắc là gì?",
+        "Sinh viên bị cảnh báo học vụ khi nào?",
+        "Thời gian đào tạo tối đa là bao lâu?",
+        "Điều kiện để được xét tốt nghiệp?"
+    ]
+    for i, q in enumerate(suggested_questions):
+        with cols[i % 2]:
+            if st.button(f"❓ {q}", key=f"suggest_{i}", use_container_width=True):
+                st.session_state.suggested_prompt = q
+                st.rerun()
+
+prompt = st.chat_input("Nhập câu hỏi của bạn (VD: Điều kiện nhận học bổng là gì?)...")
+# Kiểm tra xem có câu hỏi gợi ý được chọn không
+if "suggested_prompt" in st.session_state:
+    prompt = st.session_state.pop("suggested_prompt")
+
 # Nhận câu hỏi từ người dùng và xử lý
-if prompt := st.chat_input("Nhập câu hỏi của bạn (VD: Điều kiện nhận học bổng là gì?)..."):
+if prompt:
 
     # Hiển hiện câu hỏi người dùng
     st.session_state.chat_history.append({"role": "user", "content": prompt})
@@ -98,37 +167,61 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn (VD: Điều kiện nh
     # Hiển thị thông báo đang tìm kiếm và sinh câu trả lời
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("⏳ Đang tìm kiếm thông tin và suy nghĩ..."):
-            
-            # Tìm kiếm các chunk liên quan đến câu hỏi của người dùng bằng phương pháp hybrid search
-            retrieved_chunks = retriever.hybrid_search(prompt, top_k=3)
-
             # Sinh câu trả lời dựa trên các chunk đã tìm được và câu hỏi của người dùng
             # Lấy lịch sử hội thoại (loại bỏ câu hỏi hiện tại ở cuối mảng)
             history = st.session_state.chat_history[:-1] if len(st.session_state.chat_history) > 1 else []
+
+            # Làm phong phú câu hỏi (Query Expansion) nếu có lịch sử
+            if len(st.session_state.chat_history) >= 3:
+                # Duyệt ngược từ [-2] (bỏ câu hỏi hiện tại ở [-1])
+                prev_user_query = ""
+                for msg in reversed(st.session_state.chat_history[:-1]):
+                    if msg["role"] == "user":
+                        prev_user_query = msg["content"]
+                        break
+                if prev_user_query:
+                    enriched_query = f"{prev_user_query} {prompt}"
+                else:
+                    enriched_query = prompt
+            else:
+                enriched_query = prompt
+
+            # Tìm kiếm các chunk liên quan đến câu hỏi của người dùng bằng phương pháp hybrid search
+            retrieved_chunks = retriever.hybrid_search(enriched_query, top_k=3)
+
+            # đưa câu hỏi, tài liệu tìm được và lịch sử chat vào để sinh câu trả lời
             answer = generator.generate_answer(prompt, retrieved_chunks, chat_history=history)
 
             # Trích xuất thông tin nguồn
             sources = []
             for items in retrieved_chunks:
-                source_name = items['chunk']['source']
-                article = items['chunk']['article_id']
-                chuong = items['chunk'].get('chuong', '')
+                chunk = items['chunk']
+                source_name = chunk['source']
+                article = chunk['article_id']
+                chuong = chunk.get('chuong', '')
                 
-                url = items['chunk'].get('url', '')
+                # Ưu tiên dùng references, fallback về url
+                urls = chunk.get('references', [])
+                if not urls:
+                    url = chunk.get('url', '')
+                    urls = [url] if url else []
                 
-                if url:
-                    if chuong:
-                        citation = f"[{source_name}]({url}) ({chuong} - Mục: {article})"
-                    else:
-                        citation = f"[{source_name}]({url}) (Mục: {article})"
+                if urls:
+                    for url in urls:
+                        if chuong:
+                            citation = f"[{source_name}]({url}) ({chuong} - Mục: {article})"
+                        else:
+                            citation = f"[{source_name}]({url}) (Mục: {article})"
+                        if citation not in sources:
+                            sources.append(citation)
                 else:
                     if chuong:
                         citation = f"**{source_name}** ({chuong} - Mục: {article})"
                     else:
                         citation = f"**{source_name}** (Mục: {article})"
                     
-                if citation not in sources:
-                    sources.append(citation)
+                    if citation not in sources:
+                        sources.append(citation)
 
             # Nếu câu trả lời không đủ dữ liệu, xóa nguồn
             if "Tôi không có đủ dữ liệu" in answer:
