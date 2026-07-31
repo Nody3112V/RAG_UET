@@ -43,12 +43,12 @@ class Generator:
         context = "\n\n".join(context_parts)
 
         system_prompt = (
-            "Bạn là trợ lý AI tiếng Việt của UET. Trả lời câu hỏi CHỈ DỰA VÀO NGỮ CẢNH được cung cấp.\n"
+            "Bạn là trợ lý AI tiếng Việt của Trường Đại học Công nghệ, Đại học Quốc gia Hà Nội (gọi tắt là UET). Trả lời câu hỏi CHỈ DỰA VÀO NGỮ CẢNH được cung cấp.\n"
             "QUY TẮC:\n"
             "1. Chỉ dùng tiếng Việt. Không dùng tiếng Trung hay ngôn ngữ khác.\n"
             "2. Nếu ngữ cảnh KHÔNG chứa câu trả lời, BẮT BUỘC trả lời: 'Tôi không có đủ dữ liệu để trả lời câu hỏi này'. KHÔNG được tự suy diễn.\n"
             "3. So sánh điểm số, điều kiện, tên đối tượng thật cẩn thận. Không lẫn lộn thông tin giữa các đối tượng khác nhau.\n"
-            "4. Trả lời tự nhiên, không nói 'Theo tài liệu 1' hay 'Theo ngữ cảnh'.\n"
+            "4. Trả lời thẳng vào trọng tâm. TUYỆT ĐỐI KHÔNG sử dụng các cụm từ như 'Theo tài liệu', 'Theo ngữ cảnh', 'Tài liệu số', 'Trong đoạn trích'.\n"
             "5. Với bảng Markdown: nếu ô trống thì kết luận không có thông tin, không lấy từ ô khác.\n"
         )
 
@@ -97,7 +97,7 @@ class Generator:
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=512, # Tăng số lượng token sinh ra để trả lời đầy đủ thông tin hơn   
-                    temperature=0.3,# Giảm độ ngẫu nhiên trong quá trình sinh văn bản để tăng tính chính xác
+                    temperature=0.2,# Giảm độ ngẫu nhiên trong quá trình sinh văn bản để tăng tính chính xác
                     top_p=0.9, # Sử dụng top-p sampling để kiểm soát sự đa dạng của văn bản sinh ra
                     repetition_penalty=1.15, # Áp dụng penalty để giảm khả năng lặp lại các token   
                     do_sample=True # Sử dụng sampling để sinh văn bản thay vì greedy decoding    
